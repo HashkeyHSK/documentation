@@ -20,7 +20,7 @@ const monoFont = Space_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "HashKey Docs",
+  title: "Hash Fans",
   description:
     "This is the official documentation for HashKey Chain. Developer documentation for HashKey Chain. Developer documentation for Ethereum-compatible chains.",
 };
