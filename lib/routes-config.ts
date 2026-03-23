@@ -72,19 +72,41 @@ export const ROUTES: EachRoute[] = [
     href: "/Feedback",
     noLink: true,
     items: [
-      { 
-        title: "Get help", 
+      {
+        title: "Get help",
         href: "https://discord.com/invite/V7kypNm9cS",
         externalLink: true
       },
-      { 
-        title: "Apply for Grants", 
+      {
+        title: "Apply for Grants",
         href: "https://github.com/orgs/HashkeyHSK/discussions/categories/session-1",
         externalLink: true
       },
       {
         title: "Bug bounty",
         href: "https://github.com/orgs/HashkeyHSK/discussions/categories/bug-bounty",
+        externalLink: true,
+      },
+    ],
+  },
+  {
+    title: "HSP",
+    href: "/HSP",
+    noLink: true,
+    items: [
+      {
+        title: "Multi Pay Guide",
+        href: "/assets/%E8%AF%91%E6%96%87_HashKeyMultiPayGuide_v1.1.0.pdf",
+        externalLink: true,
+      },
+      {
+        title: "Single Pay Guide",
+        href: "/assets/%E8%AF%91%E6%96%87_HashKeySinglePayGuide-1.pdf",
+        externalLink: true,
+      },
+      {
+        title: "Payment Deck CaaS",
+        href: "/assets/Hashkey_Payment_Deck_CaaS_EN.pdf",
         externalLink: true,
       },
     ],
