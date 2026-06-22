@@ -95,14 +95,8 @@ export const ROUTES: EachRoute[] = [
     noLink: true,
     items: [
       {
-        title: "Multi Pay Guide",
-        href: "/assets/%E8%AF%91%E6%96%87_HashKeyMultiPayGuide_v1.1.0.pdf",
-        externalLink: true,
-      },
-      {
-        title: "Single Pay Guide",
-        href: "/assets/%E8%AF%91%E6%96%87_HashKeySinglePayGuide-1.pdf",
-        externalLink: true,
+        title: "Building on HSP — Developer Guide",
+        href: "",
       },
       {
         title: "Payment Deck CaaS",

@@ -1,0 +1,323 @@
+---
+title: Building on HSP — Developer Guide
+description: A self-contained introduction for hackathon developers — what HSP is, what you can build, the tools you get, and how to send your first payment.
+---
+
+# Building on HSP — Developer Guide
+
+A self-contained introduction for hackathon developers. It explains what HSP is,
+what you can build, the tools you get, and how to send your first payment.
+
+> You do **not** need to run any infrastructure. The organizer hosts a shared
+> sandbox; you point the SDK at it and pay. Everywhere you see `<...>` below, the
+> organizer will give you the value (Coordinator URL, API key, faucet). **These
+> values — and the SDK repository link — are shared once the sandbox has been
+> deployed, typically a few days later. Until then, use this guide to plan.**
+
+---
+
+## 1. What is HSP?
+
+**HSP (HashKey Settlement Protocol)** is a verifiable settlement layer for
+stablecoin payments. Instead of trusting a payment processor's "paid" flag, every
+payment carries cryptographic evidence that **anyone** can re-check.
+
+The flow is always the same three moves:
+
+1. **Intent** — the payer signs a *mandate* (an EIP-712 message: pay *this much* of
+   *this token* to *this recipient* on *this chain*, meeting *these requirements*).
+2. **Settlement** — the payer's **own wallet** broadcasts the on-chain transfer.
+   HSP is **zero-custody**: no service ever holds your funds.
+3. **Verification** — a *verifier* independently checks the receipt against the
+   mandate and a pinned trust policy. **ACCEPT means ship.**
+
+Three wire objects carry the evidence:
+
+| Object | Signed by | Says |
+|---|---|---|
+| **Mandate** | the payer | "I intend to pay X to Y, and I require capabilities Z" |
+| **Receipt** | an adapter | "I observed the settlement that satisfies this mandate" |
+| **Attestation** | an issuer | "I vouch that the subject is KYC'd / not sanctioned / …" |
+
+**The one rule that decides everything:** a verifier ACCEPTs a payment **iff**
+
+```
+requiredCapabilities  ⊆  satisfiedCapabilities
+```
+
+— i.e. everything the payer's mandate *required* is *satisfied* by the receipt's
+proof and the attestations. Nothing else. That single subset check is the whole
+trust model.
+
+---
+
+## 2. What you can build (this release)
+
+Four payment scenarios are supported end-to-end:
+
+| # | Scenario | What it demonstrates |
+|---|---|---|
+| 1 | **Public payment** (evm-transfer) | a plain ERC-20 stablecoin transfer, verified |
+| 2 | **Public payment** (x402) | paying via real **Coinbase x402 v2** (HTTP-native) |
+| 3 | **Compliant payment** (evm-transfer) | a transfer that also carries **KYC + sanctions** attestations |
+| 4 | **Compliant payment** (x402) | KYC/sanctions over the x402 path |
+
+Build agentic commerce, paid APIs (x402 paywalls), compliant settlement flows, or
+your own settlement adapter (see §7).
+
+---
+
+## 3. The tool stack
+
+You consume HSP through a small layered stack — pick the layer that fits:
+
+```
+  skills/hsp-pay   — an AI skill: teach an agent how/when to pay (safety rails)
+  @hsp/mcp         — MCP server: AI agents pay via tools (hsp_quote/pay/status/verify)
+  @hsp/sdk         — one-call pay() + independent verify()        ← most developers start here
+  @hsp/devkit      — build + conformance-test your own adapter
+  @hsp/core        — protocol primitives (types, capabilities, verifier, signer)
+  ────────────────────────────────────────────────────────────
+  Coordinator      — the hosted hub (you point your SDK at it)
+```
+
+The **Coordinator** is the only service you talk to over the network. It registers
+mandates, observes your on-chain settlement, runs the verifier, stores the
+`(mandate, receipt, attestations)` triple, and serves status + a web **Explorer**
+and **developer portal**. It is custody-free — it signs *observations*, never moves
+money.
+
+---
+
+## 4. Quickstart — your first payment in 5 minutes
+
+### What the organizer gives you
+
+- `<COORDINATOR_URL>` — the shared sandbox Coordinator (e.g. `https://…`)
+- `<API_KEY>` — your team's write key
+- `<CHAIN>` — the chain name, e.g. `hashkey-testnet`
+- A **faucet** to get testnet gas + USDC for your address
+
+### Install
+
+The SDK is distributed as a repository for the hackathon (not yet on npm). The
+organizer shares the repository link together with the sandbox details:
+
+```sh
+git clone <REPO_URL> && cd hsp
+# everything runs in Docker (no node needed on your host) — see the repo README,
+# or use your own Node 20+ toolchain:
+npm install
+```
+
+### Get testnet funds
+
+```sh
+curl -X POST <FAUCET_URL>/faucet -H 'content-type: application/json' \
+  -d '{"address":"0xYOUR_ADDRESS"}'
+```
+
+### Send a payment
+
+```ts
+import { HSPClient } from '@hsp/sdk';
+import { resolveChain } from '@hsp/core/chains/index';
+
+const chain = resolveChain('hashkey-testnet');               // pinned testnet USDC
+
+const hsp = new HSPClient({
+  coordinatorUrl: process.env.HSP_COORDINATOR_URL!,          // <COORDINATOR_URL>
+  apiKey:         process.env.HSP_API_KEY!,                  // <API_KEY>
+  signer:         { kind: 'privateKey', privateKey: process.env.HSP_PRIVATE_KEY as `0x${string}` },
+  chain,
+});
+
+// USDC has 6 decimals → 1 USDC = 1_000_000 base units
+const handle = await hsp.pay({ to: '0xRecipientAddress', amount: 1_000_000n });
+
+console.log(handle.paymentId, handle.txHash, handle.status); // mandateHash, on-chain tx, status
+const final = await handle.awaitSettled();                   // polls to SETTLED
+console.log(final.status);                                   // "SETTLED"
+```
+
+That single `pay()` call: builds the mandate → signs it → registers it with the
+Coordinator → broadcasts the ERC-20 transfer **from your own wallet** → asks the
+Coordinator to observe it → returns a handle. Open `<COORDINATOR_URL>/explorer` to
+watch the decision trace.
+
+---
+
+## 5. Core concepts you'll meet
+
+**Capabilities** — typed requirements, written `verb:object:version`. The verbs:
+
+- `proves:…` — the settlement structurally proves something (e.g. `proves:settlement-verified`)
+- `attests:…` — an issuer vouches for something (e.g. `attests:kyc`, `attests:sanctions`)
+
+A *public* payment requires the empty set (trivially satisfied). A *compliant*
+payment requires `attests:kyc` + `attests:sanctions`, satisfied by attestations.
+
+**The verifier** — pure function of `(mandate, receipt, attestations, policy)`.
+ACCEPT iff `requiredCapabilities ⊆ satisfiedCapabilities`. You can run it yourself
+(see §6) — you never have to trust the Coordinator's word.
+
+**Signer** — three backends, same wire signature:
+
+- `{ kind: 'privateKey', privateKey }` — demo / scripts (small amounts)
+- `{ kind: 'viemAccount', account }` — any viem local account
+- `{ kind: 'eip1193', provider, address }` — browser / wallet (key never leaves the wallet)
+
+The signing account is also the settling account (wallet-settling: `Transfer.from`
+must equal the mandate signer).
+
+**paymentId** — equals the `mandateHash`. Use it to query status.
+
+---
+
+## 6. Recipes
+
+### Compliant payment (KYC + sanctions)
+
+```ts
+const hsp = new HSPClient({ /* …as above… */, issuerUrl: process.env.HSP_ISSUER_URL });
+
+await hsp.pay({
+  to: '0xRecipient',
+  amount: 1_000_000n,
+  profile: { compliance: ['kyc', 'sanctions'] },   // → fetches attestations, signs the caps in
+});
+```
+
+The SDK fetches the matching attestations from the issuer and registers them with
+the Coordinator alongside your mandate; the verifier credits them.
+
+### Pay via x402 (real Coinbase x402 v2)
+
+```ts
+await hsp.payX402({
+  merchant:       '0xMerchant',
+  facilitatorUrl: process.env.HSP_FACILITATOR_URL!,   // <FACILITATOR_URL>
+  amount:         1_000_000n,
+  // profile: { compliance: ['kyc', 'sanctions'] },   // optional: compliant x402
+});
+```
+
+You sign both an HSP mandate and an EIP-3009 authorization; the facilitator settles
+on-chain (you pay no gas) and bridges it to a verifiable HSP receipt.
+
+To **charge** for an HTTP resource (an x402 paywall), use the SDK's `x402Gate` /
+`fetchWithX402` helpers — see `docs/guide.md`.
+
+### Verify a payment you received (don't trust the Coordinator)
+
+```ts
+import { HSPVerifier } from '@hsp/sdk';
+
+const verifier = new HSPVerifier({
+  chain,
+  adapterAddress: '0x<pinned-adapter-address>',   // pin once from GET <COORDINATOR_URL>/chains
+  // compliance: { trustedIssuers: […], policyRequiredCaps: […] },   // for compliant payments
+});
+
+const decision = await verifier.verify(mandate, receipt, attestations);
+if (decision.ok && decision.outcomeClass === 'ACCEPT') {
+  shipTheGoods();   // ACCEPT means ship
+}
+```
+
+You pin the adapter's observation address **out-of-band** (from `/chains` at setup,
+or your own records) and verify locally — the proof is yours to check.
+
+---
+
+## 7. Build your own settlement adapter
+
+Want to settle a different way (a new rail, a new proof)? `@hsp/devkit` gives you a
+template plus a conformance runner that checks your adapter against the protocol's
+generic obligations using the **real** verifier:
+
+```sh
+# 1. copy packages/devkit/template/my-adapter.ts and fill in your proof + verify()
+# 2. run the conformance suite until everything passes
+npm run template -w @hsp/devkit
+# 3. submit (adapterId, instanceKey, signing address, reorgPolicy) to the organizer
+#    to be registered in the sandbox Coordinator's trust set
+```
+
+---
+
+## 8. AI agents
+
+Two pieces let an AI agent pay safely:
+
+- **`@hsp/mcp`** — an MCP server exposing `hsp_quote` / `hsp_pay` / `hsp_status` /
+  `hsp_verify`. `hsp_pay` requires explicit confirmation and is bounded by a
+  server-side **SpendGuard** (per-tx cap, daily cap, optional recipient allowlist).
+  The agent never sees a private key beyond a small demo wallet you scope.
+- **`skills/hsp-pay`** — a skill that teaches the agent the safe flow
+  (always quote → get user approval → pay), routing intents to the right tool.
+
+Point the MCP server at `<COORDINATOR_URL>` and your demo key (`.mcp.json.example`
+shows the registration).
+
+---
+
+## 9. Coordinator endpoints you'll use
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/payments` | register a signed mandate (+ attestations) |
+| `POST` | `/payments/:id/observe` | ask the Coordinator to observe your settlement tx |
+| `GET`  | `/payments/:id` | payment status + the stored triple |
+| `GET`  | `/payments/:id/explain` | label-resolved decision trace (what the Explorer shows) |
+| `GET`  | `/requirements?chain=` | the deployment's requirement advertisement |
+| `GET`  | `/chains` | chain registry + the adapter address to pin |
+| `GET`  | `/stats` | public aggregate dashboard |
+| `GET`  | `/docs`, `/explorer` | developer portal + decision-trace UI |
+
+Write endpoints need `Authorization: Bearer <API_KEY>`.
+
+---
+
+## 10. Outcomes & error handling
+
+Every verifier decision carries an `outcomeClass` — branch on it like an HTTP status:
+
+| outcomeClass | Meaning | What to do |
+|---|---|---|
+| `ACCEPT` | verified | ship |
+| `RETRYABLE` | transient (e.g. not yet observable) | retry |
+| `POLICY` | a policy/requirement isn't met | fix the mandate/attestations |
+| `PERMANENT` | structurally invalid | give up / debug |
+
+`pay()` waits for the tx to mine before observing; `observe` answers `202` while the
+tx is still confirming — the SDK retries for you.
+
+---
+
+## 11. Trust model in one paragraph
+
+HSP is **zero-custody**: your wallet settles; the Coordinator only signs
+*observations* with an adapter key (it cannot move funds). A relying party (a
+merchant, an auditor, a platform) **pins** the adapter's address once and runs the
+verifier itself — *ACCEPT means ship* never requires trusting the Coordinator's
+answer. Keys: use a small demo key for scripts; use `eip1193` (a real wallet) for
+anything that matters — the key stays in the wallet.
+
+---
+
+## 12. What you'll get from the organizer
+
+> Shared once the sandbox has been deployed — typically a few days later.
+
+- `<REPO_URL>` — the SDK repository
+- `<COORDINATOR_URL>` — the hosted sandbox Coordinator
+- `<API_KEY>` — your per-team write key
+- `<CHAIN>` — chain name (e.g. `hashkey-testnet`) + the pinned stablecoin
+- `<FAUCET_URL>` — testnet gas + USDC
+- `<FACILITATOR_URL>` — *(optional)* for the x402 scenarios
+- The adapter address to pin for independent verification (also at `/chains`)
+
+---
+
+*HSP is pre-1.0 — the wire format may change between releases.*
